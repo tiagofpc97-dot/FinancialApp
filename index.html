@@ -42,6 +42,7 @@ h2{font-size:15px;font-weight:600;margin:22px 0 8px}
 .nav-m strong{font-family:var(--serif);font-weight:500;font-size:19px}
 button{font:inherit;border:0;border-radius:12px;padding:11px 16px;background:var(--accent);color:#fff;cursor:pointer;font-weight:600}
 button:active{opacity:.7}
+button:disabled{opacity:.25;cursor:default}
 button.ghost{background:transparent;color:var(--accent);padding:8px 12px;font-weight:500}
 button.danger{background:var(--red)}
 button.quiet{background:var(--line);color:var(--ink)}
@@ -116,6 +117,19 @@ nav button.on{color:var(--accent)}
     <div class="row" style="margin-top:20px">
       <button id="f-del" class="danger" onclick="apagarForm()">Apagar</button>
       <button style="flex:1" onclick="guardarForm()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="catModal" onclick="if(event.target===this)fecharCat()">
+  <div class="sheet">
+    <div class="row" style="margin-bottom:6px"><h2 id="catTitle">Editar categoria</h2><button class="ghost" onclick="fecharCat()">Fechar</button></div>
+    <label for="cat-nome">Nome</label>
+    <input id="cat-nome" maxlength="40">
+    <div id="cat-mover"></div>
+    <div class="row" style="margin-top:20px">
+      <button id="cat-del" class="danger" onclick="apagarCategoria()">Apagar</button>
+      <button style="flex:1" onclick="guardarCategoria()">Guardar</button>
     </div>
   </div>
 </div>
@@ -430,7 +444,17 @@ function vistaDefinicoes(){
     </div>
     <h2>Categorias</h2>
     <div class="card">
-      ${Object.entries(db.categories).map(([t,l]) => `<div class="muted" style="margin-bottom:8px"><strong style="color:var(--ink)">${TIPO[t]}</strong><br>${l.map(esc).join(', ')}</div>`).join('')}
+      ${Object.keys(TIPO).map(t => `
+        <div class="muted" style="margin:6px 0 2px"><strong style="color:var(--ink)">${TIPO[t]}s</strong></div>
+        ${db.categories[t].map((c,i,arr) => `
+          <div class="tx" style="cursor:default;padding:8px 0">
+            <span>${esc(c)}</span>
+            <span style="display:flex;gap:0">
+              <button class="ghost" onclick="moverCategoria('${t}',${i},-1)" ${i===0?'disabled':''} aria-label="Subir">↑</button>
+              <button class="ghost" onclick="moverCategoria('${t}',${i},1)" ${i===arr.length-1?'disabled':''} aria-label="Descer">↓</button>
+              <button class="ghost" onclick="editarCategoria('${t}',${i})">Editar</button>
+            </span>
+          </div>`).join('')}`).join('')}
       <label for="n-cat-t">Nova categoria</label>
       <div class="row">
         <select id="n-cat-t"><option value="despesa">Despesa</option><option value="receita">Receita</option><option value="investimento">Investimento</option></select>
@@ -531,6 +555,59 @@ function exportarCSV(m){
   a.download = `financas-${m}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+let catEdit = null;
+function editarCategoria(tipo, idx){
+  const nome = db.categories[tipo][idx];
+  catEdit = {tipo, nome};
+  $('#catTitle').textContent = 'Editar categoria';
+  $('#cat-nome').value = nome;
+  const usos = db.tx.filter(t => t.tipo === tipo && t.categoria === nome).length;
+  const outras = db.categories[tipo].filter(c => c !== nome);
+  $('#cat-mover').innerHTML = usos
+    ? `<label for="cat-dest">Ao apagar, mover os ${usos} movimentos para</label>
+       <select id="cat-dest">${outras.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
+    : '<div class="muted" style="margin-top:12px">Esta categoria não tem movimentos.</div>';
+  $('#cat-del').disabled = outras.length === 0; // tem de existir pelo menos uma categoria por tipo
+  $('#catModal').classList.add('open');
+}
+function fecharCat(){ $('#catModal').classList.remove('open'); catEdit = null; }
+function guardarCategoria(){
+  const novo = $('#cat-nome').value.trim();
+  const {tipo, nome} = catEdit;
+  if(!novo){ alert('Indique um nome.'); return; }
+  const lista = db.categories[tipo];
+  if(novo.toLowerCase() !== nome.toLowerCase() && lista.some(c => c.toLowerCase() === novo.toLowerCase())){
+    alert('Já existe uma categoria com esse nome.'); return;
+  }
+  if(novo !== nome){
+    lista[lista.indexOf(nome)] = novo;
+    db.tx.forEach(t => { if(t.tipo === tipo && t.categoria === nome) t.categoria = novo; });
+    if(tipo === 'despesa' && db.budgets[nome] !== undefined){
+      db.budgets[novo] = db.budgets[nome]; delete db.budgets[nome];
+    }
+  }
+  persist(); fecharCat(); render();
+}
+function apagarCategoria(){
+  const {tipo, nome} = catEdit;
+  const usos = db.tx.filter(t => t.tipo === tipo && t.categoria === nome).length;
+  const destino = usos ? $('#cat-dest').value : null;
+  const msg = usos
+    ? `Apagar "${nome}" e mover ${usos} movimentos para "${destino}"?`
+    : `Apagar a categoria "${nome}"?`;
+  if(!confirm(msg)) return;
+  if(destino) db.tx.forEach(t => { if(t.tipo === tipo && t.categoria === nome) t.categoria = destino; });
+  db.categories[tipo] = db.categories[tipo].filter(c => c !== nome);
+  if(tipo === 'despesa') delete db.budgets[nome];
+  persist(); fecharCat(); render();
+}
+function moverCategoria(tipo, idx, delta){
+  const lista = db.categories[tipo];
+  const j = idx + delta;
+  if(j < 0 || j >= lista.length) return;
+  [lista[idx], lista[j]] = [lista[j], lista[idx]];
+  persist(); render();
 }
 function addCategoria(){
   const v = $('#n-cat').value.trim(), t = $('#n-cat-t').value;

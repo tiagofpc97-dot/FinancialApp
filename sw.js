@@ -1,5 +1,5 @@
 // Incrementar a versão (v2, v3...) sempre que alterar index.html, para forçar a atualização.
-const CACHE = 'financas-v2';
+const CACHE = 'financas-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
