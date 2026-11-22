@@ -1,5 +1,5 @@
-// Incrementar a versão (v2, v3...) sempre que alterar index.html, para forçar a atualização.
-const CACHE = 'financas-v4';
+// Versão da cache: subir sempre que a app mudar (v5, v6...).
+const CACHE = 'financas-v5';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -14,13 +14,17 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// Rede primeiro: vai sempre buscar a versão mais recente ao servidor
+// e só usa a cópia guardada quando não há ligação.
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
-      const copia = res.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copia));
-      return res;
-    }).catch(() => caches.match('./index.html')))
+    fetch(e.request, { cache: 'no-cache' })
+      .then(res => {
+        const copia = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copia));
+        return res;
+      })
+      .catch(() => caches.match(e.request).then(r => r || caches.match('./index.html')))
   );
 });
