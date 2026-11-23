@@ -1,5 +1,5 @@
 // Versão da cache: subir sempre que a app mudar (v5, v6...).
-const CACHE = 'financas-v5';
+const CACHE = 'financas-v6';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

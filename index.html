@@ -161,10 +161,13 @@ const DEFAULT = {
     investimento: ['ETF / Ações','Fundos','Poupança','Certificados','Outros']
   },
   tx: [],
-  budgets: {}
+  budgets: {},
+  apagados: []
 };
 let db = load();
 db.budgets ||= {};
+db.apagados ||= [];
+db.tx.forEach(t => { t.atualizado ||= t.criado || '2000-01-01T00:00:00.000Z'; });
 function load(){
   try{ const d = JSON.parse(localStorage.getItem(KEY)); if(d && Array.isArray(d.tx)) return d; }catch(e){}
   return structuredClone(DEFAULT);
@@ -312,7 +315,7 @@ function guardarForm(){
   const data = $('#f-data').value;
   if(!data){ alert('Indique a data.'); return; }
   const dados = {
-    tipo: ui.tipo, valor: Math.round(valor * 100) / 100, date: data,
+    tipo: ui.tipo, valor: Math.round(valor * 100) / 100, date: data, atualizado: agora(),
     categoria: $('#f-cat').value, membro: $('#f-membro').value,
     descricao: $('#f-desc').value.trim(), notas: $('#f-notas').value.trim()
   };
@@ -325,6 +328,7 @@ function guardarForm(){
 }
 function apagarForm(){
   if(ui.editId && confirm('Apagar este movimento? Esta ação não pode ser desfeita.')){
+    db.apagados.push({id: ui.editId, quando: agora()});
     db.tx = db.tx.filter(x => x.id !== ui.editId);
     persist(); fecharForm(); render();
   }
@@ -500,10 +504,11 @@ function vistaDefinicoes(){
     </div>
     <h2>Cópia de segurança</h2>
     <div class="card">
-      <button style="width:100%" onclick="exportar()">Exportar todos os dados (JSON)</button>
-      <label>Importar um ficheiro de cópia</label>
+      <button style="width:100%" onclick="guardar()">Guardar (iCloud Drive / Ficheiros)</button>
+      <p class="muted">No iPhone abre a folha de partilha: escolha "Guardar em Ficheiros" e a pasta do iCloud Drive. No computador, o ficheiro é descarregado para guardar no iCloud Drive.</p>
+      <label>Importar de outro aparelho</label>
       <input type="file" accept="application/json,.json" onchange="importar(event)">
-      <p class="muted">Os dados ficam neste iPhone. Exporte de vez em quando e guarde o ficheiro no iCloud Drive.</p>
+      <p class="muted">Funde os dados: entram os movimentos novos ou alterados e são removidos os que apagou noutro aparelho.</p>
     </div>
     <h2>Zona perigosa</h2>
     <div class="card">
@@ -631,29 +636,90 @@ function addCategoria(){
   if(!db.categories[t].includes(v)) db.categories[t].push(v);
   persist(); render();
 }
-function exportar(){
-  const blob = new Blob([JSON.stringify(db, null, 2)], {type:'application/json'});
+function descarregarJSON(texto, nome){
+  const blob = new Blob([texto], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'financas-familia-' + ymd(new Date()) + '.json';
+  a.download = nome;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+const agora = () => new Date().toISOString();
+
+/* Fusão de dois conjuntos de dados (este aparelho + ficheiro importado).
+   - Movimento: prevalece a versão com data de alteração mais recente.
+   - Apagado: se um aparelho apagou o movimento depois da última alteração
+     conhecida, o movimento é removido também aqui.
+   - Membros e categorias: união das listas.
+   - Orçamentos: prevalecem os do ficheiro guardado mais recentemente. */
+function fundir(local, remoto){
+  const rastro = new Map();
+  [...local.apagados, ...(remoto.apagados || [])].forEach(a => {
+    const atual = rastro.get(a.id);
+    if(!atual || a.quando > atual.quando) rastro.set(a.id, a);
+  });
+  const porId = new Map();
+  [...local.tx, ...(remoto.tx || [])].forEach(t => {
+    const atual = porId.get(t.id);
+    if(!atual || t.atualizado > atual.atualizado) porId.set(t.id, t);
+  });
+  const removido = t => { const a = rastro.get(t.id); return a && a.quando >= t.atualizado; };
+  const tx = [...porId.values()].filter(t => !removido(t));
+  const categories = {};
+  ['receita','despesa','investimento'].forEach(t => {
+    categories[t] = [...new Set([...local.categories[t], ...(remoto.categories[t] || [])])];
+  });
+  const maisRecente = (remoto.guardadoEm || '') > (local.guardadoEm || '') ? remoto : local;
+  return {
+    members: [...new Set([...local.members, ...(remoto.members || [])])],
+    categories,
+    budgets: {...(maisRecente.budgets || {})},
+    tx,
+    apagados: [...rastro.values()],
+    guardadoEm: agora()
+  };
+}
+
 function importar(ev){
   const f = ev.target.files[0];
   if(!f) return;
   const r = new FileReader();
   r.onload = () => {
     try{
-      const d = JSON.parse(r.result);
-      if(!Array.isArray(d.tx) || !Array.isArray(d.members) || !d.categories) throw new Error();
-      if(confirm(`Substituir os dados atuais por este ficheiro? (${d.tx.length} movimentos)`)){
-        db = d; db.budgets ||= {}; persist(); render();
+      const remoto = JSON.parse(r.result);
+      if(!Array.isArray(remoto.tx) || !Array.isArray(remoto.members) || !remoto.categories) throw new Error();
+      remoto.apagados ||= [];
+      remoto.budgets ||= {};
+      remoto.tx.forEach(t => { t.atualizado ||= t.criado || '2000-01-01T00:00:00.000Z'; });
+      const novo = fundir(db, remoto);
+      const antes = new Map(db.tx.map(t => [t.id, t]));
+      const depois = new Set(novo.tx.map(t => t.id));
+      const novos = novo.tx.filter(t => !antes.has(t.id) || antes.get(t.id).atualizado !== t.atualizado).length;
+      const apagados = db.tx.filter(t => !depois.has(t.id)).length;
+      const msg = `Importar do outro aparelho:\n• ${novos} movimentos novos ou alterados\n• ${apagados} movimentos apagados noutro aparelho\n\nContinuar?`;
+      if(confirm(msg)){
+        db = {...db, ...novo};
+        persist(); render();
+        alert('Importação concluída.');
       }
     }catch(e){ alert('Ficheiro inválido.'); }
   };
   r.readAsText(f);
   ev.target.value = '';
+}
+
+async function guardar(){
+  db.guardadoEm = agora();
+  persist();
+  const texto = JSON.stringify(db, null, 2);
+  const nome = 'financas-familia.json';
+  const ficheiro = new File([texto], nome, {type:'application/json'});
+  if(navigator.canShare && navigator.canShare({files:[ficheiro]})){
+    try{ await navigator.share({files:[ficheiro], title:'Finanças da família'}); }
+    catch(e){ if(e.name !== 'AbortError') alert('Não foi possível guardar o ficheiro.'); }
+  } else {
+    descarregarJSON(texto, nome);
+  }
 }
 function apagarTudo(){
   if(confirm('Apagar TODOS os dados? Recomenda-se exportar primeiro.') && confirm('Tem a certeza?')){
